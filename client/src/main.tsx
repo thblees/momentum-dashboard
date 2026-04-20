@@ -1,10 +1,13 @@
 import { trpc } from "@/lib/trpc";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink } from "@trpc/client";
+import { httpLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
+import { installApiMock } from "./lib/apiMock";
 import "./index.css";
+
+installApiMock();
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -17,7 +20,7 @@ const queryClient = new QueryClient({
 
 const trpcClient = trpc.createClient({
   links: [
-    httpBatchLink({
+    httpLink({
       url: "/api/trpc",
       transformer: superjson,
     }),
