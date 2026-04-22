@@ -18,7 +18,7 @@ function Routes() {
 }
 
 function App() {
-  const base = (import.meta.env.BASE_URL || "/").replace(/\\/$/, "");
+  const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
   return (
     <ErrorBoundary>
