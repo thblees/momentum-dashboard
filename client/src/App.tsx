@@ -1,13 +1,10 @@
-import { Router as WouterRouter, Route, Switch } from "wouter";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { queryClient } from "./lib/queryClient";
-import { trpc, trpcClient } from "./lib/trpc";
-import { Toaster } from "@/components/ui/toaster";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ThemeProvider } from "@/components/ThemeProvider";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
-import NotFound from "@/pages/not-found";
-import Home from "@/pages/Home";
+import NotFound from "@/pages/NotFound";
+import { Router as WouterRouter, Route, Switch } from "wouter";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { ThemeProvider } from "./contexts/ThemeContext";
+import Home from "./pages/Home";
 
 function Routes() {
   return (
