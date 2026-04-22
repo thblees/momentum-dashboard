@@ -4,8 +4,8 @@ import { queryClient } from "./lib/queryClient";
 import { trpc, trpcClient } from "./lib/trpc";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ThemeProvider } from "./components/ThemeProvider";
-import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ThemeProvider } from "@/components/ThemeProvider";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
 
