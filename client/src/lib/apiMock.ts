@@ -1,6 +1,9 @@
 // Intercepts /api/trpc/* fetch calls and serves them from static JSON files
 // generated daily by a GitHub Action. Replaces the Express/tRPC backend so the
 // site can run as a static deploy on GitHub Pages.
+//
+// Falls back to a Cloudflare Worker proxy for custom tickers not found
+// in the static prices.json.
 
 type PricesFile = {
   prices: Record<string, number[]>;
@@ -15,8 +18,12 @@ type VixFile = {
   error: string | null;
 };
 
+const YAHOO_PROXY_URL = "https://yahoo-finance-proxy.tblees.workers.dev";
+
 let pricesPromise: Promise<PricesFile> | null = null;
 let vixPromise: Promise<VixFile> | null = null;
+
+const liveTickerCache: Record<string, { closes: number[]; fetchedAt: string }> = {};
 
 function dataUrl(name: string): string {
   const base = import.meta.env.BASE_URL || "/";
@@ -27,7 +34,7 @@ function loadPrices(origFetch: typeof fetch): Promise<PricesFile> {
   if (!pricesPromise) {
     pricesPromise = origFetch(dataUrl("prices.json"))
       .then((r) => {
-        if (!r.ok) throw new Error(`prices.json HTTP ${r.status}`);
+        if (!r.ok) throw new Error("prices.json HTTP " + r.status);
         return r.json() as Promise<PricesFile>;
       })
       .catch((err) => {
@@ -42,7 +49,7 @@ function loadVix(origFetch: typeof fetch): Promise<VixFile> {
   if (!vixPromise) {
     vixPromise = origFetch(dataUrl("vix.json"))
       .then((r) => {
-        if (!r.ok) throw new Error(`vix.json HTTP ${r.status}`);
+        if (!r.ok) throw new Error("vix.json HTTP " + r.status);
         return r.json() as Promise<VixFile>;
       })
       .catch((err) => {
@@ -53,8 +60,32 @@ function loadVix(origFetch: typeof fetch): Promise<VixFile> {
   return vixPromise;
 }
 
+async function fetchTickerLive(
+  ticker: string,
+  origFetch: typeof fetch
+): Promise<number[]> {
+  const cached = liveTickerCache[ticker];
+  if (cached) {
+    const age = Date.now() - new Date(cached.fetchedAt).getTime();
+    if (age < 5 * 60 * 1000) return cached.closes;
+  }
+  try {
+    const url = YAHOO_PROXY_URL + "?ticker=" + encodeURIComponent(ticker) + "&range=6mo";
+    const res = await origFetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (data.error || !Array.isArray(data.closes)) return [];
+    liveTickerCache[ticker] = {
+      closes: data.closes,
+      fetchedAt: data.fetchedAt || new Date().toISOString(),
+    };
+    return data.closes;
+  } catch {
+    return [];
+  }
+}
+
 function jsonResponse(data: unknown): Response {
-  // superjson-compatible tRPC envelope: { result: { data: { json: <data> } } }
   const body = JSON.stringify({ result: { data: { json: data } } });
   return new Response(body, {
     status: 200,
@@ -76,23 +107,34 @@ async function handle(
     try {
       const parsed = JSON.parse(rawInput);
       input = parsed?.json ?? parsed;
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   } else if (init?.body && typeof init.body === "string") {
     try {
       const parsed = JSON.parse(init.body);
       input = parsed?.json ?? parsed;
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }
 
   if (procedure === "market.getPrices" || procedure === "market.forceRefresh") {
     const tickers: string[] = Array.isArray(input?.tickers) ? input.tickers : [];
     const file = await loadPrices(origFetch);
     const out: Record<string, number[]> = {};
-    for (const t of tickers) out[t] = file.prices[t] ?? [];
+
+    const livePromises: Promise<void>[] = [];
+    for (const t of tickers) {
+      if (file.prices[t] && file.prices[t].length > 0) {
+        out[t] = file.prices[t];
+      } else {
+        livePromises.push(
+          fetchTickerLive(t, origFetch).then((closes) => { out[t] = closes; })
+        );
+      }
+    }
+
+    if (livePromises.length > 0) {
+      await Promise.all(livePromises);
+    }
+
     const now = Date.now();
     return jsonResponse({
       prices: out,
@@ -122,7 +164,7 @@ async function handle(
   }
 
   return new Response(
-    JSON.stringify({ error: { message: `Unknown procedure: ${procedure}` } }),
+    JSON.stringify({ error: { message: "Unknown procedure: " + procedure } }),
     { status: 404, headers: { "Content-Type": "application/json" } }
   );
 }
