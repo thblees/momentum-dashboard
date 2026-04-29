@@ -22,6 +22,9 @@ const YAHOO_PROXY_URL = "https://yahoo-finance-proxy.tblees.workers.dev";
 
 let pricesPromise: Promise<PricesFile> | null = null;
 let vixPromise: Promise<VixFile> | null = null;
+let pricesLoadedAt = 0;
+let vixLoadedAt = 0;
+const CACHE_TTL_MS = 15 * 60 * 1000;
 
 const liveTickerCache: Record<string, { closes: number[]; fetchedAt: string }> = {};
 
@@ -30,9 +33,14 @@ function dataUrl(name: string): string {
   return `${base}${base.endsWith("/") ? "" : "/"}data/${name}`;
 }
 
-function loadPrices(origFetch: typeof fetch): Promise<PricesFile> {
+function loadPrices(origFetch: typeof fetch, bypassCache = false): Promise<PricesFile> {
+  if (bypassCache || (pricesPromise && Date.now() - pricesLoadedAt > CACHE_TTL_MS)) {
+    pricesPromise = null;
+  }
   if (!pricesPromise) {
-    pricesPromise = origFetch(dataUrl("prices.json"))
+    const url = `${dataUrl("prices.json")}?_=${Date.now()}`;
+    pricesLoadedAt = Date.now();
+    pricesPromise = origFetch(url)
       .then((r) => {
         if (!r.ok) throw new Error("prices.json HTTP " + r.status);
         return r.json() as Promise<PricesFile>;
@@ -45,9 +53,14 @@ function loadPrices(origFetch: typeof fetch): Promise<PricesFile> {
   return pricesPromise;
 }
 
-function loadVix(origFetch: typeof fetch): Promise<VixFile> {
+function loadVix(origFetch: typeof fetch, bypassCache = false): Promise<VixFile> {
+  if (bypassCache || (vixPromise && Date.now() - vixLoadedAt > CACHE_TTL_MS)) {
+    vixPromise = null;
+  }
   if (!vixPromise) {
-    vixPromise = origFetch(dataUrl("vix.json"))
+    const url = `${dataUrl("vix.json")}?_=${Date.now()}`;
+    vixLoadedAt = Date.now();
+    vixPromise = origFetch(url)
       .then((r) => {
         if (!r.ok) throw new Error("vix.json HTTP " + r.status);
         return r.json() as Promise<VixFile>;
@@ -116,8 +129,10 @@ async function handle(
   }
 
   if (procedure === "market.getPrices" || procedure === "market.forceRefresh") {
+    const isForce = procedure === "market.forceRefresh";
     const tickers: string[] = Array.isArray(input?.tickers) ? input.tickers : [];
-    const file = await loadPrices(origFetch);
+    const file = await loadPrices(origFetch, isForce);
+    if (isForce) await loadVix(origFetch, true);
     const out: Record<string, number[]> = {};
 
     const livePromises: Promise<void>[] = [];
@@ -138,7 +153,7 @@ async function handle(
     const now = Date.now();
     return jsonResponse({
       prices: out,
-      fromCache: true,
+      fromCache: !isForce,
       fetchedAt: file.fetchedAt,
       expiresAt: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
     });
