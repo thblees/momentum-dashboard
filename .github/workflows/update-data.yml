@@ -8,43 +8,57 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  update:
+  update-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
 
       - name: Fetch Yahoo Finance data
         run: node scripts/fetch-yahoo.mjs
 
       - name: Commit updated data (if changed)
-        id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add client/public/data/
           if git diff --cached --quiet; then
             echo "No data changes."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "chore: daily Yahoo Finance data update"
             git push
-            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Trigger deploy
-        if: steps.commit.outputs.changed == 'true'
-        uses: actions/github-script@v7
+      - run: npm ci
+
+      - name: Build static site
+        run: npx vite build
+
+      - name: Copy data JSONs into build output
+        run: |
+          mkdir -p dist/public/data
+          cp -r client/public/data/* dist/public/data/ 2>/dev/null || true
+
+      - uses: actions/configure-pages@v4
+
+      - uses: actions/upload-pages-artifact@v3
         with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'deploy.yml',
-              ref: 'main',
-            });
+          path: dist/public
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
