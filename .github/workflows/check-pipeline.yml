@@ -1,0 +1,68 @@
+name: Check Data Pipeline Health
+
+on:
+  schedule:
+    # Täglich 10:00 UTC — prüft ob der nächtliche Run erfolgreich war
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write  # zum Auslösen von update-data.yml
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pipeline-Status prüfen
+        id: check
+        run: |
+          FETCHED_AT=$(jq -r '.fetchedAt' client/public/data/vix.json)
+          echo "fetchedAt=$FETCHED_AT" >> $GITHUB_OUTPUT
+
+          FETCHED_TS=$(date -d "$FETCHED_AT" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "${FETCHED_AT%.*}" +%s)
+          NOW_TS=$(date +%s)
+          AGE_HOURS=$(( (NOW_TS - FETCHED_TS) / 3600 ))
+          echo "age_hours=$AGE_HOURS" >> $GITHUB_OUTPUT
+
+          if [ "$AGE_HOURS" -gt 30 ]; then
+            echo "status=stale" >> $GITHUB_OUTPUT
+            echo "❌ Pipeline STALE — fetchedAt: $FETCHED_AT (${AGE_HOURS}h alt)"
+          else
+            echo "status=ok" >> $GITHUB_OUTPUT
+            echo "✅ Pipeline OK — fetchedAt: $FETCHED_AT (${AGE_HOURS}h alt)"
+          fi
+
+      - name: update-data.yml neu starten (wenn stale)
+        if: steps.check.outputs.status == 'stale'
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/update-data.yml/dispatches" \
+            -d '{"ref":"main"}'
+          echo "🔄 update-data.yml manuell getriggert"
+
+      - name: Job-Summary schreiben
+        run: |
+          FETCHED_AT="${{ steps.check.outputs.fetched_at }}"
+          AGE="${{ steps.check.outputs.age_hours }}"
+          STATUS="${{ steps.check.outputs.status }}"
+
+          if [ "$STATUS" = "stale" ]; then
+            {
+              echo "## ❌ Pipeline kaputt — Action neu gestartet"
+              echo "- **fetchedAt:** $FETCHED_AT"
+              echo "- **Alter:** ${AGE}h (Limit: 30h)"
+              echo "- **Maßnahme:** update-data.yml wurde neu gestartet"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## ✅ Pipeline ok"
+              echo "- **fetchedAt:** $FETCHED_AT"
+              echo "- **Alter:** ${AGE}h"
+              echo "- **Letzter Commit:** chore: daily Yahoo Finance data update"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
